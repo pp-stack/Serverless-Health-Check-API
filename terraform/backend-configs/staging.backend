@@ -1,0 +1,5 @@
+bucket = "staging-health-check-terraform-state"
+key = "staging/terraform.tfstate"
+region = "eu-west-1"
+dynamodb_table = "staging-terraform-locks"
+encrypt = true

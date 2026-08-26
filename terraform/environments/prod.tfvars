@@ -1,3 +1,5 @@
 env = "prod"
 aws_region = "eu-west-1"
 project = "prod-health-check"
+state_bucket_name = "prod-health-check-terraform-state"
+state_lock_table = "prod-terraform-locks"
