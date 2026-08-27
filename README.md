@@ -115,12 +115,11 @@ The Terraform in `terraform/bootstrap/` creates, per environment:
 - The GitHub OIDC provider (account-level, created once)
 - A dedicated, least-privilege `${env}-terraform-deploy-role` that the CI pipeline assumes to deploy the actual health-check infrastructure
 
-Before running it:
+Run this step manually via the Terraform CLI, not through GitHub Actions: the deploy role and its GitHub OIDC trust relationship don't exist yet at this point, so there is no CI credential that could authenticate this step even in principle — it's a one-time, unavoidably-manual bootstrap for exactly the credential everything else then automates around.
+
 1. Fork/clone this repo and make it public.
 2. Edit `terraform/bootstrap/environments/staging.tfvars` and `prod.tfvars`, replacing `github_org`/`github_repo` with your actual GitHub org/user and repo name.
-3. Bootstrap can be run either locally or via the `Initial Deploy (Bootstrap)` GitHub Action:
-
-   **Locally** (simplest for a first run):
+3. Run it locally with an AWS credential that can create IAM roles/policies, the OIDC provider, an S3 bucket, and a DynamoDB table (e.g. an IAM user with `AdministratorAccess`, via `aws configure`):
    ```bash
    cd terraform/bootstrap
    terraform init
@@ -128,8 +127,6 @@ Before running it:
    terraform apply -var-file=environments/prod.tfvars   # manage_oidc_provider=false, reuses the OIDC provider from staging
    ```
    Note the `deploy_role_arn` output for each environment.
-
-   **Via GitHub Actions** (`.github/workflows/initial-deploy.yml`, manual `workflow_dispatch`): since the deploy role doesn't exist until this runs, it needs its own one-time bootstrap credential — an admin-level IAM role you create by hand once, stored as the `AWS_BOOTSTRAP_ROLE_TO_ASSUME` secret on a `staging-bootstrap` / `prod-bootstrap` GitHub Environment. This is the same chicken-and-egg every OIDC setup has; running bootstrap locally avoids needing it at all.
 
 4. **Create GitHub Secrets/Environments** for the actual deploy pipelines:
    - GitHub Environment `staging`, secret `AWS_ROLE_TO_ASSUME` = the `staging-terraform-deploy-role` ARN from step 3
@@ -146,14 +143,15 @@ To test locally, install:
 
 ## 🚀 CI/CD Pipeline
 
-There are four workflows under `.github/workflows/`:
+There are three workflows under `.github/workflows/`:
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `pr-verify.yml` | Any pull request into `staging` or `prod` | Security scan + IaC validation + a **read-only** `terraform plan` for both environments, posted as a PR comment. Never applies. |
 | `deploy-staging.yml` | Push to `staging` | Full pipeline, ending in an automatic `terraform apply` to the staging environment. |
 | `deploy-prod.yml` | Push to `prod` | Same pipeline, gated by a manual approval step before `terraform apply` to production. |
-| `initial-deploy.yml` | Manual (`workflow_dispatch`) | One-time/occasional bootstrap of the state backend + OIDC deploy role (see Prerequisites above). |
+
+The one-time state-backend/OIDC bootstrap (`terraform/bootstrap/`) intentionally has no workflow of its own — see Prerequisites above for why, and how to run it.
 
 ### Pipeline Overview (deploy-staging / deploy-prod)
 
@@ -288,8 +286,7 @@ Serverless-Health-Check-API/
 ├── .github/workflows/
 │   ├── pr-verify.yml                # PR check: scan + validate + plan (no apply)
 │   ├── deploy-staging.yml           # Staging CI/CD pipeline
-│   ├── deploy-prod.yml              # Production CI/CD pipeline
-│   └── initial-deploy.yml           # One-time bootstrap workflow
+│   └── deploy-prod.yml              # Production CI/CD pipeline
 ├── terraform/
 │   ├── main.tf                      # Root module, wires components
 │   ├── variables.tf                 # Root variables
@@ -349,9 +346,9 @@ Serverless-Health-Check-API/
 - Both encrypted at rest
 - Backend config in `terraform/backend-configs/` (separate from tfvars)
 
-**Assumption**: State buckets already exist in AWS; user creates them via the bootstrap process (locally or via `initial-deploy.yml`) described in Prerequisites.
+**Assumption**: State buckets already exist in AWS; the user creates them via the local bootstrap process described in Prerequisites.
 
-**Note on bootstrap's own state**: `terraform/bootstrap` intentionally has no remote backend of its own (it's what creates one), so it uses local state. When run via `initial-deploy.yml` that local state is cached across workflow runs with `actions/cache` so re-running the workflow updates existing resources rather than trying to recreate them — a deliberate, narrow trade-off for this one-time bootstrap module, not a general pattern.
+**Note on bootstrap's own state**: `terraform/bootstrap` intentionally has no remote backend of its own (it's what creates one) - it's applied locally, once, keeping its own local state on disk. It deliberately isn't wired into a GitHub Actions workflow: doing so would need a separate, manually-created admin-level AWS credential just to authenticate that one workflow (since the OIDC provider it creates can't exist yet to authenticate it), and mixing that with a prior local `apply` would split the bootstrap state across two untracked places. Not worth the complexity for a step that's meant to run once.
 
 ### Lambda Packaging
 
