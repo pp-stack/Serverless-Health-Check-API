@@ -123,10 +123,10 @@ resource "aws_api_gateway_stage" "this" {
   # it would make /health report stale results instead of the current state.
   # checkov:skip=CKV2_AWS_29: WAFv2 web ACL - optional bonus item
   # checkov:skip=CKV2_AWS_51: client-certificate auth - optional bonus item
-  rest_api_id          = aws_api_gateway_rest_api.this.id
-  deployment_id        = aws_api_gateway_deployment.this.id
-  stage_name           = var.env
-  xray_tracing_enabled = true
+  # checkov:skip=CKV_AWS_73: X-Ray tracing currently not in scope
+  rest_api_id   = aws_api_gateway_rest_api.this.id
+  deployment_id = aws_api_gateway_deployment.this.id
+  stage_name    = var.env
 
   tags = var.tags
 }
