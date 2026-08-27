@@ -7,6 +7,11 @@ terraform {
       version = "~> 5.0"
     }
   }
+
+  # Left empty deliberately - fully configured via `-backend-config=...`
+  # pointing at terraform/backend-configs/{staging,prod}.backend, so the
+  # same config works for either environment.
+  backend "s3" {}
 }
 
 provider "aws" {

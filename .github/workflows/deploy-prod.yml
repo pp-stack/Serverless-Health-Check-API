@@ -12,8 +12,10 @@ permissions:
 
 env:
   AWS_REGION: eu-west-1
-  TF_VAR_FILE: terraform/environments/prod.tfvars
-  BACKEND_CONFIG: terraform/backend-configs/prod.backend
+  # Paths are relative to the terraform/ directory: every step below does
+  # `cd terraform` first, so these must NOT be re-prefixed with "terraform/".
+  TF_VAR_FILE: environments/prod.tfvars
+  BACKEND_CONFIG: backend-configs/prod.backend
 
 jobs:
   security-scan:
