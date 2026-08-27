@@ -46,3 +46,9 @@ variable "manage_oidc_provider" {
   type        = bool
   default     = true
 }
+
+variable "manage_apigateway_account_settings" {
+  description = "Whether this bootstrap should configure the account's API Gateway CloudWatch Logs role. Set to false in a second environment sharing the same AWS account/region so this account-level singleton setting is only managed once."
+  type        = bool
+  default     = true
+}

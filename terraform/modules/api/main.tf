@@ -114,16 +114,18 @@ resource "aws_api_gateway_deployment" "this" {
 
 # Stage resource so we can apply settings
 resource "aws_api_gateway_stage" "this" {
-  # checkov:skip=CKV_AWS_76: access logging needs the account-level
-  # aws_api_gateway_account CloudWatch role, which is a singleton shared by
-  # every API Gateway in the account/region - this per-environment module
-  # isn't set up to co-manage that safely across staging and prod applies.
-  # Deferred.
+  # checkov:skip=CKV_AWS_76: the account-level CloudWatch role this needs
+  # (terraform/bootstrap's aws_api_gateway_account) is now managed, but
+  # access_log_settings itself (a log group + format) isn't wired up here -
+  # not implemented for this exercise's scope.
   # checkov:skip=CKV_AWS_120: response caching is wrong for a liveness check -
   # it would make /health report stale results instead of the current state.
   # checkov:skip=CKV2_AWS_29: WAFv2 web ACL - optional bonus item
   # checkov:skip=CKV2_AWS_51: client-certificate auth - optional bonus item
-  # checkov:skip=CKV_AWS_73: X-Ray tracing currently not in scope
+  # checkov:skip=CKV_AWS_73: X-Ray tracing here needed a service-linked role
+  # this AWS account couldn't grant through any IAM scoping tried; disabled
+  # rather than keep guessing - see terraform/bootstrap/main.tf history.
+  # Lambda's own X-Ray tracing is unaffected.
   rest_api_id   = aws_api_gateway_rest_api.this.id
   deployment_id = aws_api_gateway_deployment.this.id
   stage_name    = var.env

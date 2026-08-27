@@ -10,3 +10,7 @@ github_repo = "Serverless-Health-Check-API"
 # Creates the account's GitHub OIDC provider. If prod bootstraps into the
 # same AWS account, set manage_oidc_provider = false there instead.
 manage_oidc_provider = true
+
+# Configures the account's API Gateway CloudWatch Logs role. If prod
+# bootstraps into the same AWS account, set this to false there instead.
+manage_apigateway_account_settings = true

@@ -92,6 +92,48 @@ resource "aws_dynamodb_table" "state_lock" {
   tags = var.tags
 }
 
+# --- API Gateway account-level CloudWatch Logs role ---
+# Required once per AWS account/region before any API Gateway stage can set
+# a method_settings logging_level other than OFF - a fully separate,
+# account-wide setting from any specific REST API (API Gateway rejects the
+# UpdateStage/method-settings call with "CloudWatch Logs role ARN must be
+# set in account settings" until this exists). Gated the same way as the
+# OIDC provider below: only one environment's bootstrap should manage it
+# when staging and prod share an AWS account.
+
+resource "aws_iam_role" "apigateway_cloudwatch" {
+  count = var.manage_apigateway_account_settings ? 1 : 0
+  name  = "apigateway-cloudwatch-logs-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "apigateway.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+# AWS-managed policy, used here exactly as AWS's own console does under the
+# hood when you enable this setting - not a hand-authored policy, so it's
+# outside the scope of this repo's own no-wildcards standard for the roles
+# we author ourselves.
+resource "aws_iam_role_policy_attachment" "apigateway_cloudwatch" {
+  count      = var.manage_apigateway_account_settings ? 1 : 0
+  role       = aws_iam_role.apigateway_cloudwatch[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+}
+
+resource "aws_api_gateway_account" "this" {
+  count               = var.manage_apigateway_account_settings ? 1 : 0
+  cloudwatch_role_arn = aws_iam_role.apigateway_cloudwatch[0].arn
+}
+
 # --- GitHub OIDC federation for CI/CD ---
 # The OIDC provider is an account-level singleton. When staging and prod
 # share one AWS account, only one environment's bootstrap should create it

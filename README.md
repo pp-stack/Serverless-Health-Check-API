@@ -53,7 +53,7 @@ The infrastructure is deployed across two environments:
 - Lambda role scoped to specific resources (no wildcards)
 - Lambda can only write to its specific DynamoDB table
 - Lambda can only write logs to its own CloudWatch log group
-- Dedicated CI/CD deploy role per environment (`staging-terraform-deploy-role` / `prod-terraform-deploy-role`), federated via GitHub OIDC (no long-lived AWS keys in GitHub), scoped to that environment's own `${env}-*` resources wherever AWS's IAM model allows resource-level ARNs. The one exception is API Gateway management, whose IAM model authorizes by HTTP verb against generated resource IDs rather than resource names — see `terraform/bootstrap/main.tf` for the reasoning.
+- Dedicated CI/CD deploy role per environment (`staging-terraform-deploy-role` / `prod-terraform-deploy-role`), federated via GitHub OIDC (no long-lived AWS keys in GitHub), scoped to that environment's own `${env}-*` resources wherever AWS's IAM model allows resource-level ARNs. Two actions are granted on `Resource: "*"` because AWS's own IAM model makes that mandatory for them, not because it was convenient: API Gateway management (authorizes by HTTP verb against generated resource IDs, not resource names) and `logs:DescribeLogGroups` (has no resource-level permissions at all in CloudWatch Logs' action model). See `terraform/bootstrap/main.tf` for the reasoning on each.
 
 ✅ **Input Validation**
 - API Gateway request model validation
@@ -73,7 +73,7 @@ The infrastructure is deployed across two environments:
 
 ✅ **Additional hardening**
 - Point-in-time recovery enabled on both DynamoDB tables
-- X-Ray active tracing on the Lambda function and the API Gateway stage
+- X-Ray active tracing on the Lambda function
 - `create_before_destroy` on the REST API to avoid downtime on replacement
 - CloudWatch log retention set to 400 days
 
@@ -114,6 +114,7 @@ The Terraform in `terraform/bootstrap/` creates, per environment:
 - An S3 bucket + DynamoDB table for encrypted, locked Terraform remote state
 - The GitHub OIDC provider (account-level, created once)
 - A dedicated, least-privilege `${env}-terraform-deploy-role` that the CI pipeline assumes to deploy the actual health-check infrastructure
+- The account's API Gateway CloudWatch Logs role (account-level, created once) - required before any stage can enable execution logging (`logging_level` other than `OFF`); without it, API Gateway rejects the stage's method settings with "CloudWatch Logs role ARN must be set in account settings"
 
 Run this step manually via the Terraform CLI, not through GitHub Actions: the deploy role and its GitHub OIDC trust relationship don't exist yet at this point, so there is no CI credential that could authenticate this step even in principle — it's a one-time, unavoidably-manual bootstrap for exactly the credential everything else then automates around.
 
@@ -124,7 +125,7 @@ Run this step manually via the Terraform CLI, not through GitHub Actions: the de
    cd terraform/bootstrap
    terraform init
    terraform apply -var-file=environments/staging.tfvars
-   terraform apply -var-file=environments/prod.tfvars   # manage_oidc_provider=false, reuses the OIDC provider from staging
+   terraform apply -var-file=environments/prod.tfvars   # manage_oidc_provider=false and manage_apigateway_account_settings=false, reuses both account-level singletons from staging
    ```
    Note the `deploy_role_arn` output for each environment.
 
@@ -257,11 +258,14 @@ curl -X POST "$API_URL" \
   -H "Content-Type: application/json" \
   -d '{}'
 
-# Response:
+# Response (rejected by the API Gateway request validator before it ever
+# reaches the Lambda - see "API Gateway Validation" below):
 # {
-#   "error": "Missing required key 'payload'"
+#   "message": "Invalid request body"
 # }
 ```
+
+Lambda's own validation (`{"error": "Missing required key 'payload'"}`) is a second line of defense behind the API Gateway model - it only surfaces for a caller invoking the function directly (see "Lambda Invocation Testing" below), not through the deployed `/health` endpoint.
 
 ### View Logs
 
@@ -331,7 +335,7 @@ Serverless-Health-Check-API/
 - `dynamodb`: DynamoDB table with SSE (can be reused across projects)
 - `lambda`: Lambda function + scoped IAM role + log group
 - `api`: API Gateway with validation and throttling
-- `bootstrap`: One-time setup for remote state (S3 + DynamoDB lock table) plus the GitHub OIDC provider and per-environment deploy role
+- `bootstrap`: One-time setup for remote state (S3 + DynamoDB lock table) plus the GitHub OIDC provider, per-environment deploy role, and the account's API Gateway CloudWatch Logs role
 
 **Benefits**:
 - Reusable across multiple projects
@@ -389,15 +393,16 @@ Serverless-Health-Check-API/
 - Only logs to its specific log group
 
 **Deploy Role Policy** (`terraform/bootstrap/main.tf`):
-- One dedicated role per environment (`staging-terraform-deploy-role`, `prod-terraform-deploy-role`), assumed only from this repo via GitHub OIDC (`sts:AssumeRoleWithWebIdentity`, condition-scoped to `repo:<org>/<repo>:*`)
+- One dedicated role per environment (`staging-terraform-deploy-role`, `prod-terraform-deploy-role`), assumed only from this repo via GitHub OIDC (`sts:AssumeRoleWithWebIdentity`, condition-scoped on both the `repository` claim and a `sub` pattern covering GitHub's newer ID-qualified subject format)
 - Every statement scopes `Resource` to that environment's own `${env}-*` name prefix where the AWS action supports resource-level ARNs (DynamoDB, Lambda, IAM roles, CloudWatch Logs)
-- The one exception is API Gateway: its management API has no resource-name ARNs — permissions are granted by HTTP verb (`apigateway:GET/POST/PUT/PATCH/DELETE`) against the generic `/restapis` path, since REST API IDs don't exist until after creation. This is a wildcard the AWS IAM model makes mandatory, not one chosen for convenience.
+- Two exceptions are mandatory wildcards, not convenience: API Gateway's management API has no resource-name ARNs — permissions are granted by HTTP verb (`apigateway:GET/POST/PUT/PATCH/DELETE`) against the generic `/restapis` and `/tags/*` paths, since REST API IDs don't exist until after creation. `logs:DescribeLogGroups` has no resource-level permissions in CloudWatch Logs' IAM model at all (Terraform calls it to check whether a log group already exists before creating one).
+- A handful of read-only actions (`lambda:ListVersionsByFunction`, `lambda:GetFunctionCodeSigningConfig`, `lambda:GetFunctionConcurrency`, `iam:ListRolePolicies`, `iam:ListAttachedRolePolicies`, `dynamodb:DescribeContinuousBackups`, `dynamodb:DescribeTimeToLive`) exist purely because the Terraform AWS provider calls them internally to reconcile state after creating a resource - easy to miss until a real `apply` surfaces the `AccessDenied` for each one.
 
 ### Multi-Environment Handling
 
 **Staging vs. Production**:
 - `terraform/environments/staging.tfvars` / `prod.tfvars`: app module vars, both in eu-west-1
-- `terraform/bootstrap/environments/staging.tfvars` / `prod.tfvars`: bootstrap-only vars (state bucket/lock table names, GitHub org/repo, OIDC provider ownership)
+- `terraform/bootstrap/environments/staging.tfvars` / `prod.tfvars`: bootstrap-only vars (state bucket/lock table names, GitHub org/repo, and the `manage_oidc_provider` / `manage_apigateway_account_settings` toggles that control which environment owns each account-level singleton when staging and prod share one AWS account)
 - Resource names prefixed with env (e.g., `staging-requests-db`, `prod-requests-db`)
 - Separate state files via backend config
 
