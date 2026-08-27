@@ -422,6 +422,7 @@ Serverless-Health-Check-API/
 - Scans `lambda/` directory for vulnerabilities
 - Results in SARIF format → GitHub Security tab
 - No need for separate `safety` tool (redundant)
+- The upload-to-Security-tab step uses `continue-on-error: true`: it needs GitHub Advanced Security, which isn't available on private repositories under the free plan. The scan itself still always runs; only the upload can fail (e.g. while this repo is private), and that no longer blocks the pipeline. Once the repo is public (or on a plan with Advanced Security), results start appearing in the Security tab automatically - no workflow change needed.
 
 **Checkov** (IaC scanning):
 - Checks Terraform against security best practices

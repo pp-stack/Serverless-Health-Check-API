@@ -32,6 +32,11 @@ jobs:
           output: 'trivy-results.sarif'
 
       - name: Upload Trivy results to GitHub Security
+        # Requires GitHub Advanced Security, which isn't available on private
+        # repos under the free plan. Non-fatal so the scan still runs and the
+        # pipeline isn't blocked; once this repo is public (or on a plan with
+        # Advanced Security) results will start appearing in the Security tab.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: 'trivy-results.sarif'
@@ -42,7 +47,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: '1.8.5'
 
@@ -103,7 +108,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: '1.8.5'
 
