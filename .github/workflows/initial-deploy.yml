@@ -7,6 +7,9 @@ name: Initial Deploy (Bootstrap)
 # This is deliberately manual (workflow_dispatch only) and uses a separate
 # bootstrap credential (see README) because the deploy role it creates does
 # not exist yet on a repo's very first run - it can't bootstrap itself.
+# checkov:skip=CKV_GHA_7: 'environment' is a fixed two-value dropdown (staging|prod),
+# not free-form user text - it only selects which tfvars/backend-config path to use,
+# never build steps or commands themselves.
 on:
   workflow_dispatch:
     inputs:
@@ -17,6 +20,10 @@ on:
         options:
           - staging
           - prod
+
+# Least-privilege default; the bootstrap job elevates only what it needs.
+permissions:
+  contents: read
 
 env:
   AWS_REGION: eu-west-1

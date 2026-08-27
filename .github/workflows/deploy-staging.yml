@@ -6,6 +6,10 @@ on:
       - staging
   workflow_dispatch:
 
+# Least-privilege default; individual jobs elevate only what they need.
+permissions:
+  contents: read
+
 env:
   AWS_REGION: eu-west-1
   TF_VAR_FILE: terraform/environments/staging.tfvars
@@ -17,6 +21,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      actions: read
     steps:
       # Trivy performs filesystem vulnerability scanning,
       # including detected Python dependencies.
