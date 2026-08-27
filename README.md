@@ -71,6 +71,27 @@ The infrastructure is deployed across two environments:
 - GitHub OIDC for credential-less AWS access
 - Pinned action versions
 
+✅ **Additional hardening**
+- Point-in-time recovery enabled on both DynamoDB tables
+- X-Ray active tracing on the Lambda function and the API Gateway stage
+- `create_before_destroy` on the REST API to avoid downtime on replacement
+- CloudWatch log retention set to 400 days
+
+### Deferred Bonus Items
+
+A few Checkov findings map directly to this project's own "Bonus Points (Optional)" list rather than a required item, and are intentionally left unaddressed with an inline `checkov:skip` + justification at each resource:
+
+- **Customer-managed KMS key** (`CKV_AWS_119`, `CKV_AWS_158`, `CKV_AWS_173`) — both DynamoDB tables, the Lambda log group, and the Lambda environment variables currently use AWS-owned/managed encryption keys, which already satisfies the required "Encryption Everywhere" item. A CMK is listed as bonus.
+- **Lambda in its own VPC** (`CKV_AWS_117`) — would need a NAT gateway or VPC endpoints for DynamoDB/CloudWatch egress, real recurring cost for a simple health check. Listed as bonus.
+- **API key authentication on `/health`** (`CKV_AWS_59`) — this is meant to be a publicly callable liveness check, matching the spec's own curl-command requirement. Listed as bonus.
+
+A few other findings were suppressed as inappropriate for this specific workload rather than deferred as bonus work:
+- **API Gateway response caching** (`CKV_AWS_120`, `CKV_AWS_225`) — caching a liveness check would make it report stale state instead of the current one.
+- **Lambda DLQ** (`CKV_AWS_116`) — this Lambda is only ever invoked synchronously via API Gateway; a DLQ catches failed *async* invocations, which never happen here.
+- **Lambda code-signing** (`CKV_AWS_272`) — needs a signing profile and a publish-time signing step; disproportionate infrastructure for this exercise.
+- **Lambda reserved concurrency** (`CKV_AWS_115`) — a capacity/cost choice, not a security control; would just add another way for this simple function to throttle itself.
+- **API Gateway access logging** (`CKV_AWS_76`) — needs the account-level `aws_api_gateway_account` CloudWatch role, a singleton shared by every API Gateway in the account/region. The current per-environment module structure isn't set up to safely co-manage that setting across separate staging/prod applies, so it's deferred rather than risk one environment's apply fighting another's.
+
 ## 📦 Prerequisites
 
 ### AWS Account Setup

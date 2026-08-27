@@ -39,17 +39,38 @@ resource "aws_iam_role_policy" "lambda_policy" {
         ],
         Effect   = "Allow",
         Resource = var.table_arn
+      },
+      {
+        # X-Ray trace write actions have no resource-level ARNs to scope by -
+        # this is the one mandatory wildcard the AWS X-Ray IAM model allows.
+        Action = [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords",
+        ],
+        Effect   = "Allow",
+        Resource = "*"
       }
     ]
   })
 }
 
+# checkov:skip=CKV_AWS_158: customer-managed KMS key is an optional
 resource "aws_cloudwatch_log_group" "lambda" {
   name              = "/aws/lambda/${var.function_name}"
   retention_in_days = 30
   tags              = var.tags
 }
 
+# checkov:skip=CKV_AWS_173: customer-managed KMS key is an  optional
+# checkov:skip=CKV_AWS_117: Lambda-in-a-VPC is an optional
+# checkov:skip=CKV_AWS_116: this Lambda is only ever invoked synchronously via
+# API Gateway proxy integration, where a failure returns straight to the
+# caller - a DLQ (for failed async invocations) has nothing to catch here.
+# checkov:skip=CKV_AWS_272: code-signing needs a signing profile and a
+# publishing pipeline step, disproportionate infrastructure for this exercise.
+# checkov:skip=CKV_AWS_115: a reserved concurrency limit is an operational
+# capacity choice, not a security control, and would just add another way for
+# this simple health check to start throttling itself.
 resource "aws_lambda_function" "this" {
   filename         = var.filename
   function_name    = var.function_name
@@ -62,6 +83,10 @@ resource "aws_lambda_function" "this" {
     variables = {
       REQUESTS_TABLE = var.table_name
     }
+  }
+
+  tracing_config {
+    mode = "Active"
   }
 
   tags = var.tags

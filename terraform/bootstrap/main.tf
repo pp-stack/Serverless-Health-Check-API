@@ -56,7 +56,12 @@ resource "aws_dynamodb_table" "state_lock" {
     type = "S"
   }
 
+  # checkov:skip=CKV_AWS_119: customer-managed KMS key is an  optional
   server_side_encryption {
+    enabled = true
+  }
+
+  point_in_time_recovery {
     enabled = true
   }
 

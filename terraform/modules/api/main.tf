@@ -7,6 +7,10 @@ resource "aws_api_gateway_rest_api" "this" {
     types = ["REGIONAL"]
   }
   tags = var.tags
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_api_gateway_resource" "health" {
@@ -34,6 +38,7 @@ resource "aws_api_gateway_request_validator" "body_validator" {
   validate_request_body = true
 }
 
+# checkov:skip=CKV_AWS_59: API-key auth is an optional
 resource "aws_api_gateway_method" "post_health" {
   rest_api_id   = aws_api_gateway_rest_api.this.id
   resource_id   = aws_api_gateway_resource.health.id
@@ -55,6 +60,7 @@ resource "aws_api_gateway_integration" "post_integration" {
 }
 
 # GET /health - no body, so no request validator is attached
+# checkov:skip=CKV_AWS_59: API-key auth is optional
 resource "aws_api_gateway_method" "get_health" {
   rest_api_id   = aws_api_gateway_rest_api.this.id
   resource_id   = aws_api_gateway_resource.health.id
@@ -104,15 +110,24 @@ resource "aws_api_gateway_deployment" "this" {
 }
 
 # Stage resource so we can apply settings
+# checkov:skip=CKV_AWS_76: access logging needs the account-level
+# aws_api_gateway_account CloudWatch role, which is a singleton shared by every
+# API Gateway in the account/region - this per-environment module isn't set up
+# to co-manage that safely across staging and prod applies. Deferred.
+# checkov:skip=CKV_AWS_120: response caching is wrong for a liveness check -
+# it would make /health report stale results instead of the current state.
 resource "aws_api_gateway_stage" "this" {
-  rest_api_id   = aws_api_gateway_rest_api.this.id
-  deployment_id = aws_api_gateway_deployment.this.id
-  stage_name    = var.env
+  rest_api_id          = aws_api_gateway_rest_api.this.id
+  deployment_id        = aws_api_gateway_deployment.this.id
+  stage_name           = var.env
+  xray_tracing_enabled = true
 
   tags = var.tags
 }
 
 # Throttling settings applied to stage methods
+# checkov:skip=CKV_AWS_225: response caching is wrong for a liveness check -
+# it would make /health report stale results instead of the current state.
 resource "aws_api_gateway_method_settings" "throttle" {
   rest_api_id = aws_api_gateway_rest_api.this.id
   stage_name  = aws_api_gateway_stage.this.stage_name
