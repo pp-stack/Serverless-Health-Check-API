@@ -193,6 +193,9 @@ resource "aws_iam_role_policy" "deploy" {
           "dynamodb:TagResource",
           "dynamodb:UntagResource",
           "dynamodb:ListTagsOfResource",
+          "dynamodb:UpdateContinuousBackups",
+          "dynamodb:DescribeContinuousBackups",
+          "dynamodb:DescribeTimeToLive",
         ]
         Resource = "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.env}-*"
       },
@@ -220,12 +223,21 @@ resource "aws_iam_role_policy" "deploy" {
         Action = [
           "logs:CreateLogGroup",
           "logs:DeleteLogGroup",
-          "logs:DescribeLogGroups",
           "logs:PutRetentionPolicy",
           "logs:TagResource",
           "logs:ListTagsForResource",
         ]
         Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${var.env}-*"
+      },
+      {
+        # DescribeLogGroups has no resource-level permissions in CloudWatch
+        # Logs' IAM action model at all - it's always called against "*",
+        # regardless of which log group is actually being looked up. Terraform
+        # calls it to check whether the log group already exists.
+        Sid      = "DescribeLogGroupsGlobal"
+        Effect   = "Allow"
+        Action   = "logs:DescribeLogGroups"
+        Resource = "*"
       },
       {
         Sid    = "ManageAppIamRole"
@@ -237,6 +249,8 @@ resource "aws_iam_role_policy" "deploy" {
           "iam:PutRolePolicy",
           "iam:DeleteRolePolicy",
           "iam:GetRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:ListAttachedRolePolicies",
           "iam:TagRole",
           "iam:UntagRole",
           "iam:PassRole",
@@ -246,13 +260,15 @@ resource "aws_iam_role_policy" "deploy" {
       {
         # API Gateway's management API has no resource-name ARNs to scope by;
         # it authorizes via HTTP-verb pseudo-actions against the generic
-        # /restapis path. This is the one mandatory wildcard.
+        # /restapis path, plus a separate /tags/* path for tagging calls.
+        # This is the one mandatory wildcard.
         Sid    = "ManageApiGateway"
         Effect = "Allow"
         Action = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"]
         Resource = [
           "arn:aws:apigateway:${var.aws_region}::/restapis",
           "arn:aws:apigateway:${var.aws_region}::/restapis/*",
+          "arn:aws:apigateway:${var.aws_region}::/tags/*",
         ]
       },
     ]
