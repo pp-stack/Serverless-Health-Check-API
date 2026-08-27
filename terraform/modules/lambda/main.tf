@@ -30,18 +30,24 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ],
-        Effect = "Allow",
+        Effect   = "Allow",
         Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${var.function_name}:*"
       },
       {
         Action = [
           "dynamodb:PutItem"
         ],
-        Effect = "Allow",
+        Effect   = "Allow",
         Resource = var.table_arn
       }
     ]
   })
+}
+
+resource "aws_cloudwatch_log_group" "lambda" {
+  name              = "/aws/lambda/${var.function_name}"
+  retention_in_days = 30
+  tags              = var.tags
 }
 
 resource "aws_lambda_function" "this" {
@@ -50,6 +56,7 @@ resource "aws_lambda_function" "this" {
   handler          = var.handler
   runtime          = var.runtime
   role             = aws_iam_role.lambda.arn
+  source_code_hash = filebase64sha256(var.filename)
 
   environment {
     variables = {
@@ -58,4 +65,9 @@ resource "aws_lambda_function" "this" {
   }
 
   tags = var.tags
+
+  depends_on = [
+    aws_iam_role_policy.lambda_policy,
+    aws_cloudwatch_log_group.lambda,
+  ]
 }

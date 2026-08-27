@@ -1,0 +1,80 @@
+name: Initial Deploy (Bootstrap)
+
+# One-time (or occasionally re-run) setup of the backend resources that the
+# staging/prod deploy pipelines depend on: the S3 state bucket, the DynamoDB
+# lock table, the GitHub OIDC provider, and the per-environment deploy role.
+#
+# This is deliberately manual (workflow_dispatch only) and uses a separate
+# bootstrap credential (see README) because the deploy role it creates does
+# not exist yet on a repo's very first run - it can't bootstrap itself.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to bootstrap'
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+
+env:
+  AWS_REGION: eu-west-1
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}-bootstrap
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_BOOTSTRAP_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.8.5'
+
+      # terraform/bootstrap has no remote backend (it's what creates the
+      # remote backend), so its state has nowhere else to live between
+      # ephemeral runs. Cache it here so re-running this workflow (e.g. to
+      # pick up a policy change) updates existing resources instead of
+      # trying to recreate them. A new cache entry is written every run
+      # (keyed on run_id); restore-keys picks up the most recent prior one.
+      # This is a narrow trade-off for this one-time bootstrap module only -
+      # it is not a substitute for a real remote backend.
+      - name: Cache bootstrap state
+        uses: actions/cache@v4
+        with:
+          path: terraform/bootstrap/terraform.tfstate
+          key: bootstrap-state-${{ inputs.environment }}-${{ github.run_id }}
+          restore-keys: |
+            bootstrap-state-${{ inputs.environment }}-
+
+      - name: Terraform Init
+        run: |
+          cd terraform/bootstrap
+          terraform init
+
+      - name: Terraform Plan
+        run: |
+          cd terraform/bootstrap
+          terraform plan -var-file=environments/${{ inputs.environment }}.tfvars -out=tfplan
+
+      - name: Terraform Apply
+        run: |
+          cd terraform/bootstrap
+          terraform apply -auto-approve tfplan
+
+      - name: Show deploy role ARN
+        run: |
+          cd terraform/bootstrap
+          echo "Deploy role ARN (store this as the ${{ inputs.environment }} environment's AWS_ROLE_TO_ASSUME secret):"
+          terraform output -raw deploy_role_arn

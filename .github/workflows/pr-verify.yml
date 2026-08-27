@@ -1,15 +1,13 @@
-name: Deploy Staging
+name: PR Verify
 
 on:
-  push:
+  pull_request:
     branches:
       - staging
-  workflow_dispatch:
+      - prod
 
 env:
   AWS_REGION: eu-west-1
-  TF_VAR_FILE: terraform/environments/staging.tfvars
-  BACKEND_CONFIG: terraform/backend-configs/staging.backend
 
 jobs:
   security-scan:
@@ -18,8 +16,6 @@ jobs:
       contents: read
       security-events: write
     steps:
-      # Trivy performs filesystem vulnerability scanning,
-      # including detected Python dependencies.
       - uses: actions/checkout@v5
 
       - name: Run Trivy filesystem vulnerability scan
@@ -64,9 +60,21 @@ jobs:
           quiet: false
           soft_fail: true
 
-  package-lambda:
+  plan:
     runs-on: ubuntu-latest
     needs: [security-scan, validate-iac]
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [staging, prod]
+    # Uses the same per-environment deploy role as the real deploy workflows,
+    # scoped to that environment's GitHub Environment secrets - read-only in
+    # effect since this job only ever runs `terraform plan`.
+    environment: ${{ matrix.environment }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v5
 
@@ -75,42 +83,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Build Lambda package (needed for plan to hash the artifact)
         run: |
           cd lambda
           pip install -r requirements.txt -t package/
           cp handler.py package/
-
-      - name: Create deployment package
-        run: |
-          cd lambda/package
+          cd package
           zip -r ../deployment.zip .
-          cd ..
-          ls -lh deployment.zip
-
-      - name: Upload Lambda package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lambda-deployment
-          path: lambda/deployment.zip
-          retention-days: 5
-
-  deploy-staging:
-    runs-on: ubuntu-latest
-    needs: package-lambda
-    environment: staging
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Download Lambda package
-        uses: actions/download-artifact@v4
-        with:
-          name: lambda-deployment
-          path: lambda/
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v6
@@ -126,24 +105,24 @@ jobs:
       - name: Terraform Init
         run: |
           cd terraform
-          terraform init -backend-config=${{ env.BACKEND_CONFIG }}
+          terraform init -backend-config=backend-configs/${{ matrix.environment }}.backend
 
       - name: Terraform Plan
+        id: plan
         run: |
           cd terraform
-          terraform plan -var-file=${{ env.TF_VAR_FILE }} -out=tfplan
+          terraform plan -var-file=environments/${{ matrix.environment }}.tfvars -no-color | tee plan_output.txt
 
-      - name: Terraform Apply
-        run: |
-          cd terraform
-          terraform apply -auto-approve tfplan
-
-      - name: Output API endpoint
-        run: |
-          cd terraform
-          terraform output -raw api_invoke_url
-
-      - name: Notify deployment
-        run: |
-          echo "✅ Staging deployment complete!"
-          echo "API Endpoint: $(cd terraform && terraform output -raw api_invoke_url)"
+      - name: Comment plan on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('terraform/plan_output.txt', 'utf8').slice(-60000);
+            const body = `#### Terraform Plan - \`${{ matrix.environment }}\`\n\`\`\`\n${plan}\n\`\`\``;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });

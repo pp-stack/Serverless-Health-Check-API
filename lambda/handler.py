@@ -23,21 +23,19 @@ def lambda_handler(event, context):
     # Log the incoming raw event for observability
     print('Received event:', json.dumps(event))
 
-    # Parse body (API Gateway v1/v2 compatibility)
-    body = None
-    try:
-        if isinstance(event.get('body'), str):
-            body = json.loads(event['body'])
-        elif event.get('body') is None and event.get('queryStringParameters'):
-            # Allow simple GET with query params encoded as body-like dict
-            body = event.get('queryStringParameters')
-        else:
-            body = event.get('body') or {}
-    except Exception:
-        return _response(400, {'error': 'Invalid JSON body'})
+    http_method = event.get('httpMethod') or event.get('requestContext', {}).get('http', {}).get('method')
 
-    # Validate presence of 'payload'
-    if not isinstance(body, dict) or 'payload' not in body:
+    # Parse body (API Gateway v1/v2 compatibility)
+    body = {}
+    if isinstance(event.get('body'), str) and event['body']:
+        try:
+            body = json.loads(event['body'])
+        except Exception:
+            return _response(400, {'error': 'Invalid JSON body'})
+
+    # POST requests must carry a JSON body containing a 'payload' key.
+    # GET is treated as a plain liveness check and does not require one.
+    if http_method == 'POST' and (not isinstance(body, dict) or 'payload' not in body):
         return _response(400, {'error': "Missing required key 'payload'"})
 
     # Prepare item
@@ -45,7 +43,8 @@ def lambda_handler(event, context):
     timestamp = datetime.datetime.utcnow().isoformat() + 'Z'
     item = {
         'id': item_id,
-        'payload': body.get('payload'),
+        'method': http_method,
+        'payload': body.get('payload') if isinstance(body, dict) else None,
         'received_at': timestamp
     }
 

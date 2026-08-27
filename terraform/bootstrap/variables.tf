@@ -30,3 +30,19 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "github_org" {
+  description = "GitHub organization or user that owns the repository (used in the OIDC trust condition)"
+  type        = string
+}
+
+variable "github_repo" {
+  description = "GitHub repository name (used in the OIDC trust condition)"
+  type        = string
+}
+
+variable "manage_oidc_provider" {
+  description = "Whether this bootstrap should create the account's GitHub OIDC provider. Set to false in a second environment sharing the same AWS account so the provider (an account-level singleton) is only created once."
+  type        = bool
+  default     = true
+}

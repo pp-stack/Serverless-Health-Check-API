@@ -1,5 +1,12 @@
 terraform {
   required_version = "~> 1.8.5"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
 }
 
 provider "aws" {
@@ -17,26 +24,26 @@ module "dynamodb" {
 
 # Lambda function module
 module "lambda" {
-  source = "./modules/lambda"
-  env    = var.env
+  source        = "./modules/lambda"
+  env           = var.env
   function_name = "${var.env}-health-check-function"
-  filename = "${path.module}/../lambda/deployment.zip"
-  handler  = "handler.lambda_handler"
-  runtime  = "python3.14"
-  aws_region = var.aws_region
-  table_name = module.dynamodb.table_name
-  table_arn  = module.dynamodb.table_arn
-  tags = { Project = var.project }
+  filename      = "${path.module}/../lambda/deployment.zip"
+  handler       = "handler.lambda_handler"
+  runtime       = "python3.12"
+  aws_region    = var.aws_region
+  table_name    = module.dynamodb.table_name
+  table_arn     = module.dynamodb.table_arn
+  tags          = { Project = var.project }
 }
 
 # API Gateway module
 module "api" {
-  source = "./modules/api"
-  env = var.env
+  source        = "./modules/api"
+  env           = var.env
   function_name = module.lambda.function_name
   function_arn  = module.lambda.function_arn
-  aws_region = var.aws_region
-  tags = { Project = var.project }
+  aws_region    = var.aws_region
+  tags          = { Project = var.project }
 }
 
 output "api_invoke_url" {

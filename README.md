@@ -5,11 +5,10 @@ A fully-automated, production-ready serverless health-check API deployed on AWS 
 ## 📋 Overview
 
 This repository implements a simple health-check endpoint (`/health`) that:
-1. Accepts POST requests with a JSON payload containing a `payload` key
-2. Validates the incoming request (returns 400 if `payload` is missing)
-3. Logs the request to CloudWatch
-4. Stores request details in DynamoDB with a unique ID
-5. Returns a 200 OK response with status information
+1. Accepts GET or POST requests. POST requests must carry a JSON body containing a `payload` key (returns 400 if missing); GET is treated as a plain liveness check and requires no body.
+2. Logs the request to CloudWatch
+3. Stores request details in DynamoDB with a unique ID
+4. Returns a 200 OK response with status information
 
 The infrastructure is deployed across two environments:
 - **Staging** (eu-west-1): Auto-deployed on push to `staging` branch
@@ -20,15 +19,15 @@ The infrastructure is deployed across two environments:
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ API Gateway (REST API)                                      │
-│ - POST /health endpoint                                     │
-│ - Request validation (requires 'payload' key)              │
+│ - GET/POST /health endpoint                                 │
+│ - Request validation on POST (requires 'payload' key)       │
 │ - Throttling: 50 req/s, 100 burst                          │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Lambda Function (Python 3.14)                                │
-│ - Validates JSON payload                                    │
+│ Lambda Function (Python 3.12)                                │
+│ - Validates JSON payload on POST                            │
 │ - Logs to CloudWatch                                        │
 │ - Writes to DynamoDB table                                  │
 │ - IAM role: Least-privilege (logs + DynamoDB:PutItem)      │
@@ -54,6 +53,7 @@ The infrastructure is deployed across two environments:
 - Lambda role scoped to specific resources (no wildcards)
 - Lambda can only write to its specific DynamoDB table
 - Lambda can only write logs to its own CloudWatch log group
+- Dedicated CI/CD deploy role per environment (`staging-terraform-deploy-role` / `prod-terraform-deploy-role`), federated via GitHub OIDC (no long-lived AWS keys in GitHub), scoped to that environment's own `${env}-*` resources wherever AWS's IAM model allows resource-level ARNs. The one exception is API Gateway management, whose IAM model authorizes by HTTP verb against generated resource IDs rather than resource names — see `terraform/bootstrap/main.tf` for the reasoning.
 
 ✅ **Input Validation**
 - API Gateway request model validation
@@ -75,72 +75,56 @@ The infrastructure is deployed across two environments:
 
 ### AWS Account Setup
 
-1. **Create AWS Account** with credentials:
-   - Access Key ID
-   - Secret Access Key
-   - Or configure AWS CLI: `aws configure`
+You need an AWS account and an initial credential (e.g. an admin IAM user, or `aws configure`) **only** to run the one-time bootstrap below. Every deployment after that runs through GitHub Actions with no long-lived AWS keys.
 
-2. **Create S3 buckets for remote state** (unique globally):
+### One-time bootstrap (state backend + deploy roles)
+
+The Terraform in `terraform/bootstrap/` creates, per environment:
+- An S3 bucket + DynamoDB table for encrypted, locked Terraform remote state
+- The GitHub OIDC provider (account-level, created once)
+- A dedicated, least-privilege `${env}-terraform-deploy-role` that the CI pipeline assumes to deploy the actual health-check infrastructure
+
+Before running it:
+1. Fork/clone this repo and make it public.
+2. Edit `terraform/bootstrap/environments/staging.tfvars` and `prod.tfvars`, replacing `github_org`/`github_repo` with your actual GitHub org/user and repo name.
+3. Bootstrap can be run either locally or via the `Initial Deploy (Bootstrap)` GitHub Action:
+
+   **Locally** (simplest for a first run):
    ```bash
-   # Staging state bucket
-   aws s3 mb s3://staging-health-check-terraform-state --region us-east-1
-   
-   # Prod state bucket
-   aws s3 mb s3://prod-health-check-terraform-state --region eu-west-1
+   cd terraform/bootstrap
+   terraform init
+   terraform apply -var-file=environments/staging.tfvars
+   terraform apply -var-file=environments/prod.tfvars   # manage_oidc_provider=false, reuses the OIDC provider from staging
    ```
+   Note the `deploy_role_arn` output for each environment.
 
-3. **Enable versioning on state buckets**:
-   ```bash
-   aws s3api put-bucket-versioning \
-     --bucket staging-health-check-terraform-state \
-     --versioning-configuration Status=Enabled \
-     --region us-east-1
-   ```
+   **Via GitHub Actions** (`.github/workflows/initial-deploy.yml`, manual `workflow_dispatch`): since the deploy role doesn't exist until this runs, it needs its own one-time bootstrap credential — an admin-level IAM role you create by hand once, stored as the `AWS_BOOTSTRAP_ROLE_TO_ASSUME` secret on a `staging-bootstrap` / `prod-bootstrap` GitHub Environment. This is the same chicken-and-egg every OIDC setup has; running bootstrap locally avoids needing it at all.
 
-### GitHub Setup
-
-1. **Fork this repository** and make it public
-
-2. **Configure GitHub OIDC for AWS** (recommended):
-   - Follow AWS docs: [Use GitHub Actions with AWS](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_oidc.html)
-   - Create IAM role with trust policy for GitHub:
-   ```json
-   {
-     "Version": "2012-10-17",
-     "Statement": [
-       {
-         "Effect": "Allow",
-         "Principal": {
-           "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
-         },
-         "Action": "sts:AssumeRoleWithWebIdentity",
-         "Condition": {
-           "StringLike": {
-             "token.actions.githubusercontent.com:sub": "repo:YOUR_ORG/Serverless-Health-Check-API:*"
-           }
-         }
-       }
-     ]
-   }
-   ```
-
-3. **Create GitHub Secrets** (required):
-   - `AWS_ROLE_TO_ASSUME`: ARN of the IAM role created above
-     - Format: `arn:aws:iam::ACCOUNT_ID:role/github-actions-role`
+4. **Create GitHub Secrets/Environments** for the actual deploy pipelines:
+   - GitHub Environment `staging`, secret `AWS_ROLE_TO_ASSUME` = the `staging-terraform-deploy-role` ARN from step 3
+   - GitHub Environment `prod`, secret `AWS_ROLE_TO_ASSUME` = the `prod-terraform-deploy-role` ARN from step 3
+   - GitHub Environment `prod-approval` (no secrets needed) — used purely as a manual approval gate; add required reviewers under Settings → Environments
 
 ### Local Development (Optional)
 
 To test locally, install:
 - Terraform >= 1.8.5
-- Python 3.14
+- Python 3.12
 - AWS CLI v2
 - Git
 
 ## 🚀 CI/CD Pipeline
 
-### Pipeline Overview
+There are four workflows under `.github/workflows/`:
 
-Both workflows (staging and prod) follow this flow:
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| `pr-verify.yml` | Any pull request into `staging` or `prod` | Security scan + IaC validation + a **read-only** `terraform plan` for both environments, posted as a PR comment. Never applies. |
+| `deploy-staging.yml` | Push to `staging` | Full pipeline, ending in an automatic `terraform apply` to the staging environment. |
+| `deploy-prod.yml` | Push to `prod` | Same pipeline, gated by a manual approval step before `terraform apply` to production. |
+| `initial-deploy.yml` | Manual (`workflow_dispatch`) | One-time/occasional bootstrap of the state backend + OIDC deploy role (see Prerequisites above). |
+
+### Pipeline Overview (deploy-staging / deploy-prod)
 
 ```
 1. Security Scan (Trivy)
@@ -169,6 +153,10 @@ Both workflows (staging and prod) follow this flow:
 ```
 
 ### Triggering Deployments
+
+#### PR Verification (Automatic)
+
+Every pull request into `staging` or `prod` triggers `pr-verify.yml`: dependency/IaC scanning plus a `terraform plan` for both environments, so reviewers see the infrastructure diff before merge without anything actually being applied.
 
 #### Staging Deployment (Automatic)
 
@@ -204,8 +192,8 @@ Check deployment status in GitHub Actions tab.
 
 From GitHub Actions logs or via AWS CLI:
 ```bash
-aws apigateway get-rest-apis --region us-east-1
-aws apigateway get-stages --rest-api-id <API_ID> --region us-east-1
+aws apigateway get-rest-apis --region eu-west-1
+aws apigateway get-stages --rest-api-id <API_ID> --region eu-west-1
 ```
 
 Or from Terraform output:
@@ -218,9 +206,12 @@ terraform output api_invoke_url
 ### Example: Send a Request
 
 ```bash
-API_URL="https://<api_id>.execute-api.us-east-1.amazonaws.com/staging/health"
+API_URL="https://<api_id>.execute-api.eu-west-1.amazonaws.com/staging/health"
 
-# Valid request (should return 200)
+# GET - plain liveness check, no body required (should return 200)
+curl -X GET "$API_URL"
+
+# POST with valid payload (should return 200)
 curl -X POST "$API_URL" \
   -H "Content-Type: application/json" \
   -d '{"payload": "Health check data"}'
@@ -232,7 +223,7 @@ curl -X POST "$API_URL" \
 #   "id": "550e8400-e29b-41d4-a716-446655440000"
 # }
 
-# Invalid request (missing payload, should return 400)
+# POST missing payload (should return 400)
 curl -X POST "$API_URL" \
   -H "Content-Type: application/json" \
   -d '{}'
@@ -264,37 +255,42 @@ aws logs tail /aws/lambda/staging-health-check-function \
 ```
 Serverless-Health-Check-API/
 ├── .github/workflows/
-│   ├── deploy-staging.yml          # Staging CI/CD pipeline
-│   └── deploy-prod.yml             # Production CI/CD pipeline
+│   ├── pr-verify.yml                # PR check: scan + validate + plan (no apply)
+│   ├── deploy-staging.yml           # Staging CI/CD pipeline
+│   ├── deploy-prod.yml              # Production CI/CD pipeline
+│   └── initial-deploy.yml           # One-time bootstrap workflow
 ├── terraform/
-│   ├── main.tf                     # Root module, wires components
-│   ├── variables.tf                # Root variables
-│   ├── outputs.tf                  # Root outputs (API URL)
+│   ├── main.tf                      # Root module, wires components
+│   ├── variables.tf                 # Root variables
+│   ├── outputs.tf                   # Root outputs (API URL)
 │   ├── bootstrap/
-│   │   ├── main.tf                 # S3 state bucket + DynamoDB lock table
-│   │   └── variables.tf
+│   │   ├── main.tf                  # State backend + OIDC provider + deploy role
+│   │   ├── variables.tf
+│   │   └── environments/
+│   │       ├── staging.tfvars       # Bootstrap vars (staging)
+│   │       └── prod.tfvars          # Bootstrap vars (prod)
 │   ├── modules/
 │   │   ├── dynamodb/
-│   │   │   ├── main.tf             # DynamoDB table (SSE enabled)
+│   │   │   ├── main.tf              # DynamoDB table (SSE enabled)
 │   │   │   ├── variables.tf
 │   │   │   └── outputs.tf
 │   │   ├── lambda/
-│   │   │   ├── main.tf             # Lambda function + IAM role
+│   │   │   ├── main.tf              # Lambda function + IAM role + log group
 │   │   │   ├── variables.tf
 │   │   │   └── outputs.tf
 │   │   └── api/
-│   │       ├── main.tf             # API Gateway (REST, /health, validation, throttling)
+│   │       ├── main.tf              # API Gateway (REST, /health GET+POST, validation, throttling)
 │   │       └── variables.tf
 │   ├── environments/
-│   │   ├── staging.tfvars          # Staging variable overrides
-│   │   └── prod.tfvars             # Production variable overrides
+│   │   ├── staging.tfvars           # Staging variable overrides (app module)
+│   │   └── prod.tfvars              # Production variable overrides (app module)
 │   └── backend-configs/
-│       ├── staging.backend         # S3 remote state config (staging)
-│       └── prod.backend            # S3 remote state config (prod)
+│       ├── staging.backend          # S3 remote state config (staging)
+│       └── prod.backend             # S3 remote state config (prod)
 ├── lambda/
-│   ├── handler.py                  # Lambda function logic
-│   ├── requirements.txt            # Python dependencies (boto3)
-│   └── deployment.zip              # Packaged Lambda (generated by CI)
+│   ├── handler.py                   # Lambda function logic
+│   ├── requirements.txt             # Python dependencies (boto3)
+│   └── deployment.zip               # Packaged Lambda (generated by CI)
 ├── .gitignore                       # Git ignore rules
 └── README.md                        # This file
 ```
@@ -305,9 +301,9 @@ Serverless-Health-Check-API/
 
 **Modular Design**: Separated resources into reusable modules:
 - `dynamodb`: DynamoDB table with SSE (can be reused across projects)
-- `lambda`: Lambda function + scoped IAM role
+- `lambda`: Lambda function + scoped IAM role + log group
 - `api`: API Gateway with validation and throttling
-- `bootstrap`: One-time setup for remote state (S3 + DynamoDB lock table)
+- `bootstrap`: One-time setup for remote state (S3 + DynamoDB lock table) plus the GitHub OIDC provider and per-environment deploy role
 
 **Benefits**:
 - Reusable across multiple projects
@@ -322,7 +318,9 @@ Serverless-Health-Check-API/
 - Both encrypted at rest
 - Backend config in `terraform/backend-configs/` (separate from tfvars)
 
-**Assumption**: State buckets already exist in AWS; user creates them via bootstrap process.
+**Assumption**: State buckets already exist in AWS; user creates them via the bootstrap process (locally or via `initial-deploy.yml`) described in Prerequisites.
+
+**Note on bootstrap's own state**: `terraform/bootstrap` intentionally has no remote backend of its own (it's what creates one), so it uses local state. When run via `initial-deploy.yml` that local state is cached across workflow runs with `actions/cache` so re-running the workflow updates existing resources rather than trying to recreate them — a deliberate, narrow trade-off for this one-time bootstrap module, not a general pattern.
 
 ### Lambda Packaging
 
@@ -362,11 +360,16 @@ Serverless-Health-Check-API/
 - Only allows PutItem to its specific table
 - Only logs to its specific log group
 
+**Deploy Role Policy** (`terraform/bootstrap/main.tf`):
+- One dedicated role per environment (`staging-terraform-deploy-role`, `prod-terraform-deploy-role`), assumed only from this repo via GitHub OIDC (`sts:AssumeRoleWithWebIdentity`, condition-scoped to `repo:<org>/<repo>:*`)
+- Every statement scopes `Resource` to that environment's own `${env}-*` name prefix where the AWS action supports resource-level ARNs (DynamoDB, Lambda, IAM roles, CloudWatch Logs)
+- The one exception is API Gateway: its management API has no resource-name ARNs — permissions are granted by HTTP verb (`apigateway:GET/POST/PUT/PATCH/DELETE`) against the generic `/restapis` path, since REST API IDs don't exist until after creation. This is a wildcard the AWS IAM model makes mandatory, not one chosen for convenience.
+
 ### Multi-Environment Handling
 
 **Staging vs. Production**:
-- `terraform/environments/staging.tfvars`: staging vars (us-east-1)
-- `terraform/environments/prod.tfvars`: prod vars (eu-west-1)
+- `terraform/environments/staging.tfvars` / `prod.tfvars`: app module vars, both in eu-west-1
+- `terraform/bootstrap/environments/staging.tfvars` / `prod.tfvars`: bootstrap-only vars (state bucket/lock table names, GitHub org/repo, OIDC provider ownership)
 - Resource names prefixed with env (e.g., `staging-requests-db`, `prod-requests-db`)
 - Separate state files via backend config
 
@@ -380,7 +383,7 @@ Serverless-Health-Check-API/
 - Automatic credential rotation
 - Better for secret management
 
-**Assumption**: AWS account has OIDC provider configured for GitHub.
+**Assumption**: The GitHub OIDC provider and per-environment deploy role are created by the one-time bootstrap step (see Prerequisites), not assumed to pre-exist.
 
 ### CI/CD Security Scanning
 
@@ -438,11 +441,20 @@ aws logs tail /aws/lambda/staging-health-check-function --max-items 20
 
 ### Lambda Invocation Testing
 
+The handler expects an API Gateway proxy-style event (it reads `httpMethod` and a JSON-encoded `body`), so a direct invoke needs to mimic that shape:
+
 ```bash
-# Direct Lambda invocation
+cat > test-event.json <<'EOF'
+{
+  "httpMethod": "POST",
+  "body": "{\"payload\": \"test\"}"
+}
+EOF
+
 aws lambda invoke \
   --function-name staging-health-check-function \
-  --payload '{"payload": "test"}' \
+  --cli-binary-format raw-in-base64-out \
+  --payload file://test-event.json \
   --region eu-west-1 \
   response.json
 

@@ -1,5 +1,3 @@
-env = "staging"
+env        = "staging"
 aws_region = "eu-west-1"
-project = "staging-health-check"
-state_bucket_name = "staging-health-check-terraform-state"
-state_lock_table = "staging-terraform-locks"
+project    = "staging-health-check"

@@ -15,23 +15,22 @@ resource "aws_api_gateway_resource" "health" {
   path_part   = "health"
 }
 
-# Model and validator for POST requests to ensure 'payload' exists
+# Model and validator for POST requests to ensure 'payload' exists.
+# Type is intentionally left unconstrained: only presence of the key is
+# enforced here, mirroring the Lambda's own validation.
 resource "aws_api_gateway_model" "post_model" {
-  rest_api_id = aws_api_gateway_rest_api.this.id
-  name        = "PostPayloadModel"
+  rest_api_id  = aws_api_gateway_rest_api.this.id
+  name         = "PostPayloadModel"
   content_type = "application/json"
   schema = jsonencode({
-    type = "object",
-    required = ["payload"],
-    properties = {
-      payload = { type = "string" }
-    }
+    type     = "object",
+    required = ["payload"]
   })
 }
 
 resource "aws_api_gateway_request_validator" "body_validator" {
-  rest_api_id = aws_api_gateway_rest_api.this.id
-  name        = "BodyValidator"
+  rest_api_id           = aws_api_gateway_rest_api.this.id
+  name                  = "BodyValidator"
   validate_request_body = true
 }
 
@@ -47,12 +46,29 @@ resource "aws_api_gateway_method" "post_health" {
 }
 
 resource "aws_api_gateway_integration" "post_integration" {
-  rest_api_id = aws_api_gateway_rest_api.this.id
-  resource_id = aws_api_gateway_resource.health.id
-  http_method = aws_api_gateway_method.post_health.http_method
+  rest_api_id             = aws_api_gateway_rest_api.this.id
+  resource_id             = aws_api_gateway_resource.health.id
+  http_method             = aws_api_gateway_method.post_health.http_method
   integration_http_method = "POST"
-  type = "AWS_PROXY"
-  uri  = "arn:aws:apigateway:${var.aws_region}:lambda:path/2015-03-31/functions/${var.function_arn}/invocations"
+  type                    = "AWS_PROXY"
+  uri                     = "arn:aws:apigateway:${var.aws_region}:lambda:path/2015-03-31/functions/${var.function_arn}/invocations"
+}
+
+# GET /health - no body, so no request validator is attached
+resource "aws_api_gateway_method" "get_health" {
+  rest_api_id   = aws_api_gateway_rest_api.this.id
+  resource_id   = aws_api_gateway_resource.health.id
+  http_method   = "GET"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "get_integration" {
+  rest_api_id             = aws_api_gateway_rest_api.this.id
+  resource_id             = aws_api_gateway_resource.health.id
+  http_method             = aws_api_gateway_method.get_health.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = "arn:aws:apigateway:${var.aws_region}:lambda:path/2015-03-31/functions/${var.function_arn}/invocations"
 }
 
 # Allow API Gateway to invoke the Lambda
@@ -66,15 +82,32 @@ resource "aws_lambda_permission" "apigw_invoke" {
 }
 
 resource "aws_api_gateway_deployment" "this" {
-  depends_on = [aws_api_gateway_integration.post_integration]
+  depends_on = [
+    aws_api_gateway_integration.post_integration,
+    aws_api_gateway_integration.get_integration,
+  ]
   rest_api_id = aws_api_gateway_rest_api.this.id
+
+  triggers = {
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_resource.health.id,
+      aws_api_gateway_method.post_health.id,
+      aws_api_gateway_integration.post_integration.id,
+      aws_api_gateway_method.get_health.id,
+      aws_api_gateway_integration.get_integration.id,
+    ]))
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Stage resource so we can apply settings
 resource "aws_api_gateway_stage" "this" {
-  rest_api_id = aws_api_gateway_rest_api.this.id
+  rest_api_id   = aws_api_gateway_rest_api.this.id
   deployment_id = aws_api_gateway_deployment.this.id
-  stage_name = var.env
+  stage_name    = var.env
 
   tags = var.tags
 }
@@ -87,10 +120,10 @@ resource "aws_api_gateway_method_settings" "throttle" {
   method_path = "*/*"
 
   settings {
-    metrics_enabled = true
-    logging_level = "INFO"
-    data_trace_enabled = false
-    throttling_rate_limit = 50
+    metrics_enabled        = true
+    logging_level          = "INFO"
+    data_trace_enabled     = false
+    throttling_rate_limit  = 50
     throttling_burst_limit = 100
   }
 }
