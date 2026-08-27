@@ -40,7 +40,7 @@ def lambda_handler(event, context):
 
     # Prepare item
     item_id = str(uuid.uuid4())
-    timestamp = datetime.datetime.utcnow().isoformat() + 'Z'
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
     item = {
         'id': item_id,
         'method': http_method,
