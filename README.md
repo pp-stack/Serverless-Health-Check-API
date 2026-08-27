@@ -85,12 +85,22 @@ A few Checkov findings map directly to this project's own "Bonus Points (Optiona
 - **Lambda in its own VPC** (`CKV_AWS_117`) — would need a NAT gateway or VPC endpoints for DynamoDB/CloudWatch egress, real recurring cost for a simple health check. Listed as bonus.
 - **API key authentication on `/health`** (`CKV_AWS_59`) — this is meant to be a publicly callable liveness check, matching the spec's own curl-command requirement. Listed as bonus.
 
+Two more findings are the same bonus category applied to alternate mechanisms:
+- **API Gateway client-certificate auth** (`CKV2_AWS_51`) — another bonus-tier auth mechanism (like API keys); this is meant to be a publicly callable health check.
+- **API Gateway WAFv2 web ACL** (`CKV2_AWS_29`) — an extra protection layer beyond what the spec asks for; the required DDoS/abuse mitigation (throttling) is already implemented via `aws_api_gateway_method_settings`.
+
 A few other findings were suppressed as inappropriate for this specific workload rather than deferred as bonus work:
 - **API Gateway response caching** (`CKV_AWS_120`, `CKV_AWS_225`) — caching a liveness check would make it report stale state instead of the current one.
 - **Lambda DLQ** (`CKV_AWS_116`) — this Lambda is only ever invoked synchronously via API Gateway; a DLQ catches failed *async* invocations, which never happen here.
 - **Lambda code-signing** (`CKV_AWS_272`) — needs a signing profile and a publish-time signing step; disproportionate infrastructure for this exercise.
 - **Lambda reserved concurrency** (`CKV_AWS_115`) — a capacity/cost choice, not a security control; would just add another way for this simple function to throttle itself.
 - **API Gateway access logging** (`CKV_AWS_76`) — needs the account-level `aws_api_gateway_account` CloudWatch role, a singleton shared by every API Gateway in the account/region. The current per-environment module structure isn't set up to safely co-manage that setting across separate staging/prod applies, so it's deferred rather than risk one environment's apply fighting another's.
+- **GET method request validation** (`CKV2_AWS_53`) — GET has no request body to validate; the required `payload`-key check applies only to POST, which does have a validator attached.
+- **State bucket hardening** (`CKV_AWS_18` access logging, `CKV_AWS_144` cross-region replication, `CKV_AWS_145` default KMS encryption, `CKV2_AWS_62` event notifications) — all real options for the Terraform state bucket, but disproportionate infrastructure (a log-target bucket, a second bucket in another region, a KMS key) for this exercise's remote state, which is already versioned, AES256-encrypted, and lock-protected. A lifecycle rule expiring noncurrent versions after 90 days *is* implemented, since that one's essentially free.
+
+### A note on Checkov suppression comment placement
+
+Checkov's Terraform parser only honors `# checkov:skip=<ID>:<reason>` when the comment line falls **inside** the resource's `{ }` block (its line number must be strictly between the block's start and end line) — a comment placed directly above the `resource` line, which is the convention several other tools (and Checkov's own GitHub Actions framework) accept, is silently ignored for Terraform. All suppressions in this repo are placed inside their resource blocks for that reason.
 
 ## 📦 Prerequisites
 

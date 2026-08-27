@@ -8,7 +8,7 @@ resource "aws_dynamodb_table" "this" {
     type = "S"
   }
 
-  # checkov:skip=CKV_AWS_119: customer-managed KMS key is an optional
+  # checkov:skip=CKV_AWS_119: customer-managed KMS key - optional bonus item
   server_side_encryption {
     enabled = true
     # kms_key_arn = var.kms_key_arn # optional customer-managed key

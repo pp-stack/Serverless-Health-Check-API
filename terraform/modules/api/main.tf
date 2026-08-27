@@ -38,8 +38,8 @@ resource "aws_api_gateway_request_validator" "body_validator" {
   validate_request_body = true
 }
 
-# checkov:skip=CKV_AWS_59: API-key auth is an optional
 resource "aws_api_gateway_method" "post_health" {
+  # checkov:skip=CKV_AWS_59: API-key auth - optional bonus item
   rest_api_id   = aws_api_gateway_rest_api.this.id
   resource_id   = aws_api_gateway_resource.health.id
   http_method   = "POST"
@@ -60,8 +60,11 @@ resource "aws_api_gateway_integration" "post_integration" {
 }
 
 # GET /health - no body, so no request validator is attached
-# checkov:skip=CKV_AWS_59: API-key auth is optional
 resource "aws_api_gateway_method" "get_health" {
+  # checkov:skip=CKV_AWS_59: API-key auth - optional bonus item
+  # checkov:skip=CKV2_AWS_53: GET has no request body to validate - the
+  # required 'payload' key check applies only to POST, which does have a
+  # validator attached.
   rest_api_id   = aws_api_gateway_rest_api.this.id
   resource_id   = aws_api_gateway_resource.health.id
   http_method   = "GET"
@@ -110,13 +113,16 @@ resource "aws_api_gateway_deployment" "this" {
 }
 
 # Stage resource so we can apply settings
-# checkov:skip=CKV_AWS_76: access logging needs the account-level
-# aws_api_gateway_account CloudWatch role, which is a singleton shared by every
-# API Gateway in the account/region - this per-environment module isn't set up
-# to co-manage that safely across staging and prod applies. Deferred.
-# checkov:skip=CKV_AWS_120: response caching is wrong for a liveness check -
-# it would make /health report stale results instead of the current state.
 resource "aws_api_gateway_stage" "this" {
+  # checkov:skip=CKV_AWS_76: access logging needs the account-level
+  # aws_api_gateway_account CloudWatch role, which is a singleton shared by
+  # every API Gateway in the account/region - this per-environment module
+  # isn't set up to co-manage that safely across staging and prod applies.
+  # Deferred.
+  # checkov:skip=CKV_AWS_120: response caching is wrong for a liveness check -
+  # it would make /health report stale results instead of the current state.
+  # checkov:skip=CKV2_AWS_29: WAFv2 web ACL - optional bonus item
+  # checkov:skip=CKV2_AWS_51: client-certificate auth - optional bonus item
   rest_api_id          = aws_api_gateway_rest_api.this.id
   deployment_id        = aws_api_gateway_deployment.this.id
   stage_name           = var.env
@@ -126,9 +132,9 @@ resource "aws_api_gateway_stage" "this" {
 }
 
 # Throttling settings applied to stage methods
-# checkov:skip=CKV_AWS_225: response caching is wrong for a liveness check -
-# it would make /health report stale results instead of the current state.
 resource "aws_api_gateway_method_settings" "throttle" {
+  # checkov:skip=CKV_AWS_225: response caching is wrong for a liveness check -
+  # it would make /health report stale results instead of the current state.
   rest_api_id = aws_api_gateway_rest_api.this.id
   stage_name  = aws_api_gateway_stage.this.stage_name
 

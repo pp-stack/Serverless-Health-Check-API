@@ -54,24 +54,26 @@ resource "aws_iam_role_policy" "lambda_policy" {
   })
 }
 
-# checkov:skip=CKV_AWS_158: customer-managed KMS key is an optional
 resource "aws_cloudwatch_log_group" "lambda" {
+  # checkov:skip=CKV_AWS_158: customer-managed KMS key - optional bonus item
   name              = "/aws/lambda/${var.function_name}"
-  retention_in_days = 30
+  retention_in_days = 400
   tags              = var.tags
 }
 
-# checkov:skip=CKV_AWS_173: customer-managed KMS key is an  optional
-# checkov:skip=CKV_AWS_117: Lambda-in-a-VPC is an optional
-# checkov:skip=CKV_AWS_116: this Lambda is only ever invoked synchronously via
-# API Gateway proxy integration, where a failure returns straight to the
-# caller - a DLQ (for failed async invocations) has nothing to catch here.
-# checkov:skip=CKV_AWS_272: code-signing needs a signing profile and a
-# publishing pipeline step, disproportionate infrastructure for this exercise.
-# checkov:skip=CKV_AWS_115: a reserved concurrency limit is an operational
-# capacity choice, not a security control, and would just add another way for
-# this simple health check to start throttling itself.
 resource "aws_lambda_function" "this" {
+  # checkov:skip=CKV_AWS_173: customer-managed KMS key - optional bonus item
+  # checkov:skip=CKV_AWS_117: Lambda in its own VPC - optional bonus item
+  # checkov:skip=CKV_AWS_116: this Lambda is only ever invoked synchronously
+  # via API Gateway proxy integration, where a failure returns straight to
+  # the caller - a DLQ (for failed async invocations) has nothing to catch
+  # here.
+  # checkov:skip=CKV_AWS_272: code-signing needs a signing profile and a
+  # publishing pipeline step, disproportionate infrastructure for this
+  # exercise.
+  # checkov:skip=CKV_AWS_115: a reserved concurrency limit is an operational
+  # capacity choice, not a security control, and would just add another way
+  # for this simple health check to start throttling itself.
   filename         = var.filename
   function_name    = var.function_name
   handler          = var.handler

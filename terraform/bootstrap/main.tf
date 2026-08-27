@@ -18,6 +18,15 @@ data "aws_caller_identity" "current" {}
 # --- Remote state backend ---
 
 resource "aws_s3_bucket" "state" {
+  # checkov:skip=CKV_AWS_145: customer-managed KMS key - optional bonus item
+  # checkov:skip=CKV_AWS_18: a dedicated access-log target bucket doubles this
+  # bootstrap module's bucket count for marginal benefit - state changes are
+  # already tracked via S3 versioning plus the DynamoDB lock table.
+  # checkov:skip=CKV_AWS_144: cross-region replication is disproportionate
+  # infrastructure (a second bucket in another region) for this exercise's
+  # Terraform state bucket.
+  # checkov:skip=CKV2_AWS_62: event notifications have no consumer here -
+  # nothing in this project reacts to state-bucket object events.
   bucket = var.state_bucket_name
   tags   = var.tags
 }
@@ -26,6 +35,21 @@ resource "aws_s3_bucket_versioning" "state" {
   bucket = aws_s3_bucket.state.id
   versioning_configuration {
     status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "state" {
+  bucket = aws_s3_bucket.state.id
+  rule {
+    id     = "expire-noncurrent-state-versions"
+    status = "Enabled"
+    filter {}
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
   }
 }
 
@@ -56,7 +80,7 @@ resource "aws_dynamodb_table" "state_lock" {
     type = "S"
   }
 
-  # checkov:skip=CKV_AWS_119: customer-managed KMS key is an  optional
+  # checkov:skip=CKV_AWS_119: customer-managed KMS key - optional bonus item
   server_side_encryption {
     enabled = true
   }
