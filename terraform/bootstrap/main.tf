@@ -131,12 +131,26 @@ resource "aws_iam_role" "deploy" {
         Effect    = "Allow"
         Principal = { Federated = local.oidc_provider_arn }
         Action    = "sts:AssumeRoleWithWebIdentity"
+        # AWS requires the trust policy to evaluate 'sub' (or
+        # 'job_workflow_ref'), scoped - it rejects a policy that relies only
+        # on 'repository'. GitHub now embeds stable numeric owner/repo IDs
+        # into 'sub' to prevent repojacking after a rename, e.g.
+        # "repo:org@12345/repo@67890:environment:staging" instead of the
+        # plain "repo:org/repo:environment:staging" it used to be. Matching
+        # both forms keeps this portable (no hardcoded IDs) and correct
+        # whichever format a given repo's tokens actually use.
+        # 'repository' is kept alongside as a clean, exact-match belt to the
+        # wildcarded 'sub' suspenders.
         Condition = {
           StringEquals = {
-            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+            "token.actions.githubusercontent.com:aud"        = "sts.amazonaws.com"
+            "token.actions.githubusercontent.com:repository" = "${var.github_org}/${var.github_repo}"
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:*"
+            "token.actions.githubusercontent.com:sub" = [
+              "repo:${var.github_org}/${var.github_repo}:*",
+              "repo:${var.github_org}@*/${var.github_repo}@*:*",
+            ]
           }
         }
       }
